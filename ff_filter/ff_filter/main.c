@@ -15,47 +15,42 @@
 #include "libavfilter/buffersrc.h"
 #include "libavfilter/buffersink.h"
 
-static AVFormatContext *fmt_ctx;
-static AVCodecContext *dec_ctx;
-
-AVFilterGraph *graph = NULL;
-AVFilterContext *buf_ctx = NULL;
-AVFilterContext *bufsink_ctx = NULL;
-
-static int v_stream_index = -1;
 
 /**
  *  @brief 打开媒体流和解码器
  */
-static int open_input_file(const char *filename) {
+static int open_input_file(const char *filename,
+                           AVFormatContext **fmt_ctx,
+                           AVCodecContext **dec_ctx,
+                           int *v_stream_index) {
     int ret = -1;
     AVCodec *dec = NULL;
     
-    if ((ret = avformat_open_input(&fmt_ctx, filename, NULL, NULL)) < 0) {
+    if ((ret = avformat_open_input(fmt_ctx, filename, NULL, NULL)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Failed to open file %s\n", filename);
         return ret;
     }
     
-    if ((ret = avformat_find_stream_info(fmt_ctx, NULL)) < 0) {
+    if ((ret = avformat_find_stream_info(*fmt_ctx, NULL)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Failed to find stream information!\n");
         return ret;
     }
     
-    if ((ret = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO,  -1, -1, &dec, 0)) < 0) {
+    if ((ret = av_find_best_stream(*fmt_ctx, AVMEDIA_TYPE_VIDEO,  -1, -1, &dec, 0)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Can't find video stream!");
         return ret;
     }
     
-    v_stream_index = ret;
+    *v_stream_index = ret;
     
-    dec_ctx = avcodec_alloc_context3(dec);
+    *dec_ctx = avcodec_alloc_context3(dec);
     if (!dec_ctx) {
         return AVERROR(ENOMEM);
     }
     
-    avcodec_parameters_to_context(dec_ctx, fmt_ctx->streams[v_stream_index]->codecpar);
+    avcodec_parameters_to_context(*dec_ctx, (*fmt_ctx)->streams[*v_stream_index]->codecpar);
     
-    if ((ret = avcodec_open2(dec_ctx, dec, NULL)) < 0) {
+    if ((ret = avcodec_open2(*dec_ctx, dec, NULL)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Failed to open decoder!");
         return ret;
     }
@@ -66,7 +61,13 @@ static int open_input_file(const char *filename) {
 /**
  * @brief 初始化Filter
  */
-static int init_filters(const char *filter_desc) {
+static int init_filters(const char *filter_desc,
+                        AVFormatContext *fmt_ctx,
+                        AVCodecContext *dec_ctx,
+                        int v_stream_index,
+                        AVFilterGraph **graph,
+                        AVFilterContext **buf_ctx,
+                        AVFilterContext **bufsink_ctx) {
     
     int ret = -1;
     
@@ -81,8 +82,8 @@ static int init_filters(const char *filter_desc) {
         return AVERROR(ENOMEM);
     }
     
-    graph = avfilter_graph_alloc();
-    if (!graph) {
+    *graph = avfilter_graph_alloc();
+    if (!(*graph)) {
         av_log(NULL, AV_LOG_ERROR, "No Memory when create graph!\n");
         return AVERROR(ENOMEM);
     }
@@ -107,38 +108,38 @@ static int init_filters(const char *filter_desc) {
              time_base.num, time_base.den,
              dec_ctx->sample_aspect_ratio.num, dec_ctx->sample_aspect_ratio.den);
     
-    if((ret = avfilter_graph_create_filter(&buf_ctx, bufsrc, "in", args, NULL, graph)) < 0) {
+    if((ret = avfilter_graph_create_filter(buf_ctx, bufsrc, "in", args, NULL, *graph)) < 0) {
       av_log(NULL, AV_LOG_ERROR, "Failed to create buffer filter context!\n");
       goto __ERROR;
     }
     
      //输出 buffer sink filter
     enum AVPixelFormat pix_fmts[] = {AV_PIX_FMT_YUV420P, AV_PIX_FMT_GRAY8, AV_PIX_FMT_NONE};
-    if((ret = avfilter_graph_create_filter(&bufsink_ctx, bufsink, "out", NULL, NULL, graph)) < 0) {
+    if((ret = avfilter_graph_create_filter(bufsink_ctx, bufsink, "out", NULL, NULL, *graph)) < 0) {
        av_log(NULL, AV_LOG_ERROR, "Failed to create buffer sink filter context!\n");
        goto __ERROR;
     }
     
-    av_opt_set_int_list(bufsink_ctx, "pix_fmts", pix_fmts, AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+    av_opt_set_int_list(*bufsink_ctx, "pix_fmts", pix_fmts, AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
     
     //create in/out
     inputs->name = av_strdup("out");
-    inputs->filter_ctx = bufsink_ctx;
+    inputs->filter_ctx = *bufsink_ctx;
     inputs->pad_idx = 0;
     inputs->next = NULL;
     
     outputs->name = av_strdup("in");
-    outputs->filter_ctx = buf_ctx;
+    outputs->filter_ctx = *buf_ctx;
     outputs->pad_idx = 0;
     outputs->next = NULL;
     
     //create filter and add graph for filter desciption
-    if ((ret = avfilter_graph_parse_ptr(graph, filter_desc, &inputs, &outputs, NULL)) < 0) {
+    if ((ret = avfilter_graph_parse_ptr(*graph, filter_desc, &inputs, &outputs, NULL)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Failed to parse filter description!\n");
         goto __ERROR;
     }
     
-    if((ret = avfilter_graph_config(graph, NULL)) < 0) {
+    if((ret = avfilter_graph_config(*graph, NULL)) < 0) {
        av_log(NULL, AV_LOG_ERROR, "Failed to config graph!\n");
     }
   
@@ -158,7 +159,11 @@ static int do_frame(AVFrame *filt_frame, FILE *out) {
 }
 
 //do filter
-static int filter_video(AVFrame *frame, AVFrame *filt_frame, FILE *out) {
+static int filter_video(AVFrame *frame,
+                        AVFrame *filt_frame,
+                        AVFilterContext *buf_ctx,
+                        AVFilterContext *bufsink_ctx,
+                        FILE *out) {
     
     int ret;
     if ((ret = av_buffersrc_add_frame(buf_ctx, frame)) < 0) {
@@ -183,7 +188,12 @@ static int filter_video(AVFrame *frame, AVFrame *filt_frame, FILE *out) {
 }
 
 //解码视频帧并对视频帧进行滤镜处理
-static int decode_frame_and_filter(AVFrame *frame, AVFrame *filt_frame, FILE *out) {
+static int decode_frame_and_filter(AVFrame *frame,
+                                   AVFrame *filt_frame,
+                                   AVCodecContext *dec_ctx,
+                                   AVFilterContext *buf_ctx,
+                                   AVFilterContext *bufsink_ctx,
+                                   FILE *out) {
     int ret = avcodec_receive_frame(dec_ctx, frame);
     if (ret < 0) {
         if(ret != AVERROR_EOF && ret != AVERROR(EAGAIN)){
@@ -191,14 +201,22 @@ static int decode_frame_and_filter(AVFrame *frame, AVFrame *filt_frame, FILE *ou
         }
         return ret;
     }
-    return filter_video(frame, filt_frame, out);
+    return filter_video(frame, filt_frame, buf_ctx, bufsink_ctx,out);
 }
 
 int main(int argc, const char * argv[]) {
     
     int ret;
-    
     FILE *out;
+    
+    AVFormatContext *fmt_ctx;
+    AVCodecContext *dec_ctx;
+
+    AVFilterGraph *graph = NULL;
+    AVFilterContext *buf_ctx = NULL;
+    AVFilterContext *bufsink_ctx = NULL;
+
+    static int v_stream_index = -1;
     
     AVPacket packet;
     AVFrame *frame = NULL;
@@ -223,10 +241,19 @@ int main(int argc, const char * argv[]) {
         exit(-1);
     }
     
-    if (open_input_file(filename) < 0) {
+    if (open_input_file(filename,
+                        &fmt_ctx,
+                        &dec_ctx,
+                        &v_stream_index) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Failed to open media file\n");
     } else {
-        if (init_filters(filter_desc) < 0) {
+        if (init_filters(filter_desc,
+                         fmt_ctx,
+                         dec_ctx,
+                         v_stream_index,
+                         &graph,
+                         &buf_ctx,
+                         &bufsink_ctx) < 0) {
             av_log(NULL, AV_LOG_ERROR, "Failed to initialize filter!\n");
             goto __ERROR;
         }
@@ -243,7 +270,12 @@ int main(int argc, const char * argv[]) {
                 av_log(NULL, AV_LOG_ERROR, "Failed to send avpacket to decoder!\n");
                 break;
             }
-            if ((ret = decode_frame_and_filter(frame, filt_frame, out)) < 0) {
+            if ((ret = decode_frame_and_filter(frame,
+                                               filt_frame,
+                                               dec_ctx,
+                                               buf_ctx,
+                                               bufsink_ctx,
+                                               out)) < 0) {
                 if(ret == AVERROR(EAGAIN) || ret == AVERROR_EOF){
                     continue;
                 }
@@ -256,5 +288,24 @@ int main(int argc, const char * argv[]) {
     return 0;
     
 __ERROR:
+    if(graph){
+       avfilter_graph_free(&graph);
+    }
+
+    if(dec_ctx){
+       avcodec_free_context(&dec_ctx);
+    }
+
+    if(fmt_ctx){
+       avformat_close_input(&fmt_ctx);
+    }
+
+    if(frame){
+       av_frame_free(&frame);
+    }
+
+    if(filt_frame){
+       av_frame_free(&filt_frame);
+    }
     return -1;
 }
