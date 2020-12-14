@@ -20,18 +20,18 @@ COMMON_OPTIONS="\
     "
 function build_android {
 
-    ./configure \
-    --libdir=${PREFIX}/libs/armeabi-v7a \
-    --incdir=${PREFIX}/includes/armeabi-v7a \
-    --pkgconfigdir=${PREFIX}/pkgconfig/armeabi-v7a \
-    --arch=arm \
-    --cpu=armv7-a \
-    --cross-prefix="${NDK_HOME}/bin/arm-linux-androideabi-" \
-    --sysroot="${NDK_HOME}/sysroot/" \
-    --extra-ldexeflags=-pie \
-    ${COMMON_OPTIONS}
-    make clean
-    make -j8 && make install
+#    ./configure \
+#    --libdir=${PREFIX}/libs/armeabi-v7a \
+#    --incdir=${PREFIX}/includes/armeabi-v7a \
+#    --pkgconfigdir=${PREFIX}/pkgconfig/armeabi-v7a \
+#    --arch=arm \
+#    --cpu=armv7-a \
+#    --cross-prefix="${NDK_HOME}/bin/arm-linux-androideabi-" \
+#    --sysroot="${NDK_HOME}/sysroot/" \
+#    --extra-ldexeflags=-pie \
+#    ${COMMON_OPTIONS}
+#    make clean
+#    make -j8 && make install
 
 
     ./configure \
